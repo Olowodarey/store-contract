@@ -15,7 +15,7 @@ pub mod Store {
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
         StoragePointerWriteAccess,
     };
-    use starknet::{ClassHash, ContractAddress, get_caller_address};
+    use starknet::{ClassHash, ContractAddress};
     // incontract calls
     use store::interfaces::Istore::IStore;
     use store::structs::Struct::Items;
@@ -112,9 +112,7 @@ pub mod Store {
         fn add_item(
             ref self: ContractState, productname: felt252, price: u32, quantity: u32, Img: felt252,
         ) {
-            let caller = get_caller_address();
-
-            // Ensure only the default admin can call this function
+            //  only the default admin can call this function
             self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
 
             assert!(productname != 0, " productname cannot be empty");
@@ -157,45 +155,32 @@ pub mod Store {
         }
 
         fn buy_item(ref self: ContractState, productId: u32, quantity: u32) -> bool {
-            // Check if product exists
             assert!(productId <= self.store_count.read(), "Product does not exist");
 
-            // Get the current item
             let mut item = self.store.read(productId);
 
-            // Check if there's enough quantity available
             assert!(item.quantity >= quantity, "Not enough quantity available");
 
-            // Update the item quantity
             item.quantity -= quantity;
 
-            // Save the updated item back to storage
             self.store.write(productId, item);
 
-            // Return success
             true
         }
 
         fn buy_item_by_name(ref self: ContractState, productname: felt252, quantity: u32) -> bool {
-            // Get the product ID from the product name
             let productId = self.product_name_to_id.read(productname);
 
-            // Check if product exists
             assert!(productId != 0, "Product does not exist");
 
-            // Get the current item
             let mut item = self.store.read(productId);
 
-            // Check if there's enough quantity available
             assert!(item.quantity >= quantity, "Not enough quantity available");
 
-            // Update the item quantity
             item.quantity -= quantity;
 
-            // Save the updated item back to storage
             self.store.write(productId, item);
 
-            // Return success
             true
         }
     }
