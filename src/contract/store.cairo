@@ -4,18 +4,24 @@
 const PAUSER_ROLE: felt252 = selector!("PAUSER_ROLE");
 const UPGRADER_ROLE: felt252 = selector!("UPGRADER_ROLE");
 
+
 #[starknet::contract]
 pub mod Store {
     use openzeppelin::access::accesscontrol::{AccessControlComponent, DEFAULT_ADMIN_ROLE};
     use openzeppelin::introspection::src5::SRC5Component;
     use openzeppelin::security::pausable::PausableComponent;
+    use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
     use openzeppelin::upgrades::UpgradeableComponent;
     use openzeppelin::upgrades::interface::IUpgradeable;
     use starknet::storage::{
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
         StoragePointerWriteAccess,
     };
-    use starknet::{ClassHash, ContractAddress};
+    use starknet::{
+        ClassHash, ContractAddress, get_block_timestamp, get_caller_address, get_contract_address,
+    };
+
+
     // incontract calls
     use store::interfaces::Istore::IStore;
     use store::structs::Struct::Items;
@@ -54,6 +60,8 @@ pub mod Store {
         store: Map<u32, Items>,
         // Map product names to product IDs
         product_name_to_id: Map<felt252, u32>,
+        //payment
+        payment_token_address: ContractAddress,
     }
 
     #[event]
@@ -70,12 +78,17 @@ pub mod Store {
     }
 
     #[constructor]
-    fn constructor(ref self: ContractState, default_admin: ContractAddress) {
+    fn constructor(
+        ref self: ContractState, default_admin: ContractAddress, token_address: ContractAddress,
+    ) {
         self.accesscontrol.initializer();
 
         self.accesscontrol._grant_role(DEFAULT_ADMIN_ROLE, default_admin);
         self.accesscontrol._grant_role(PAUSER_ROLE, default_admin);
         self.accesscontrol._grant_role(UPGRADER_ROLE, default_admin);
+
+        // seting the payment token address
+        self.payment_token_address.write(token_address);
     }
 
     #[generate_trait]
@@ -179,6 +192,63 @@ pub mod Store {
 
             item.quantity -= quantity;
 
+            self.store.write(productId, item);
+
+            true
+        }
+
+        fn buy_product(ref self: ContractState, productId: u32, quantity: u32, price: u32) -> bool {
+            let buyer = get_caller_address();
+            let mut cost: u32 = 0;
+            let mut i: u32 = 1;
+
+            // check if the product exists and get the price without modifying the storage
+
+            // verify the product exists
+            assert!(productId <= self.store_count.read(), "Product does not exist");
+
+            // get the item from storage
+            let item = self.store.read(productId);
+
+            //get the price
+            let item_price = item.price * quantity;
+
+            assert!(item_price == price, "Invalid price");
+
+            //lets handle payment
+            let payment_token_address = self.payment_token_address.read();
+            let contract_address = get_contract_address();
+
+            // we need to convert u32 to u256 for the ERC20 interface
+            // We divide by PRICE_SCALING_FACTOR to get the actual token amount
+            // decimal scaling factor for price representation
+            // 1000 means prices are stored with 3 decimal places (e.g., 2343 = 2.343)
+            const PRICE_SCALING_FACTOR: u32 = 1000;
+            let total_price_u256: u256 = price.into() / PRICE_SCALING_FACTOR.into();
+            // going to divide the Price scaling factor to get the actual token amount
+            let total_price_u256: u256 = price.into() / PRICE_SCALING_FACTOR.into();
+
+            // we need to convert to wei (10^18)  for strk token
+            let total_price_in_wei: u256 = total_price_u256 * 1000000000000000000;
+
+            // create a dispatcher to interact with the token contract
+            let token_dispatcher = IERC20Dispatcher { contract_address: payment_token_address };
+
+            // check if the buyer has enough balance
+            let balance = token_dispatcher.balance_of(buyer);
+            assert!(balance >= total_price_in_wei, "Insufficient balance");
+
+            // check if the contract has enough allowance the buyer must approve the contract to
+            // spend their tokens
+            let allowance = token_dispatcher.allowance(buyer, contract_address);
+            assert!(allowance >= total_price_in_wei, "Insufficient allowance");
+
+            // transfer the tokens from the buyer to the contract
+            token_dispatcher.transfer_from(buyer, contract_address, total_price_in_wei);
+
+            // update the item quantity
+            let mut item = self.store.read(productId);
+            item.quantity -= quantity;
             self.store.write(productId, item);
 
             true

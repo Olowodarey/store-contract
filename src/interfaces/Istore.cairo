@@ -12,4 +12,5 @@ pub trait IStore<TContractState> {
     fn get_all_items(self: @TContractState) -> Array<Items>;
     fn buy_item(ref self: TContractState, productId: u32, quantity: u32) -> bool;
     fn buy_item_by_name(ref self: TContractState, productname: felt252, quantity: u32) -> bool;
+    fn buy_product(ref self: TContractState, productId: u32, quantity: u32, price: u32) -> bool;
 }
