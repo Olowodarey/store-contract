@@ -4,7 +4,7 @@
 #[starknet::contract]
 mod Olowotoken {
     use openzeppelin::access::ownable::OwnableComponent;
-    use openzeppelin::token::erc20::{DefaultConfig, ERC20Component, ERC20HooksEmptyImpl};
+    use openzeppelin::token::erc20::{ERC20Component, ERC20HooksEmptyImpl};
     use openzeppelin::upgrades::UpgradeableComponent;
     use openzeppelin::upgrades::interface::IUpgradeable;
     use starknet::{ClassHash, ContractAddress};
@@ -46,8 +46,8 @@ mod Olowotoken {
     }
 
     #[constructor]
-    fn constructor(ref self: ContractState, owner: ContractAddress) {
-        self.erc20.initializer("olowotoken", "MTK");
+    fn constructor(ref self: ContractState, recipient: ContractAddress, owner: ContractAddress) {
+        self.erc20.initializer("Olowotoken", "OLO");
         self.ownable.initializer(owner);
 
         self.erc20.mint(recipient, 10000000000000000000000);

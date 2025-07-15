@@ -167,89 +167,55 @@ pub mod Store {
             all_items
         }
 
-        fn buy_item(ref self: ContractState, productId: u32, quantity: u32) -> bool {
-            assert!(productId <= self.store_count.read(), "Product does not exist");
 
-            let mut item = self.store.read(productId);
-
-            assert!(item.quantity >= quantity, "Not enough quantity available");
-
-            item.quantity -= quantity;
-
-            self.store.write(productId, item);
-
-            true
-        }
-
-        fn buy_item_by_name(ref self: ContractState, productname: felt252, quantity: u32) -> bool {
-            let productId = self.product_name_to_id.read(productname);
-
-            assert!(productId != 0, "Product does not exist");
-
-            let mut item = self.store.read(productId);
-
-            assert!(item.quantity >= quantity, "Not enough quantity available");
-
-            item.quantity -= quantity;
-
-            self.store.write(productId, item);
-
-            true
-        }
-
-        fn buy_product(ref self: ContractState, productId: u32, quantity: u32, price: u32) -> bool {
+        fn buy_product(
+            ref self: ContractState, productId: u32, quantity: u32, expected_price: u32,
+        ) -> bool {
             let buyer = get_caller_address();
-            let mut cost: u32 = 0;
-            let mut i: u32 = 1;
 
-            // check if the product exists and get the price without modifying the storage
-
-            // verify the product exists
+            // Verify the product exists
             assert!(productId <= self.store_count.read(), "Product does not exist");
 
-            // get the item from storage
+            // Get the item from storage
             let item = self.store.read(productId);
 
-            //get the price
-            let item_price = item.price * quantity;
+            // Calculate the total price
+            let total_price = item.price * quantity;
+            assert!(total_price == expected_price, "Invalid price provided");
 
-            assert!(item_price == price, "Invalid price");
+            // Verify there's enough quantity
+            assert!(item.quantity >= quantity, "Not enough quantity available");
 
-            //lets handle payment
+            // Handle payment
             let payment_token_address = self.payment_token_address.read();
             let contract_address = get_contract_address();
 
-            // we need to convert u32 to u256 for the ERC20 interface
-            // We divide by PRICE_SCALING_FACTOR to get the actual token amount
-            // decimal scaling factor for price representation
-            // 1000 means prices are stored with 3 decimal places (e.g., 2343 = 2.343)
+            // Convert price using proper scaling
+            // Assuming item.price is stored as price * PRICE_SCALING_FACTOR
             const PRICE_SCALING_FACTOR: u32 = 1000;
-            let total_price_u256: u256 = price.into() / PRICE_SCALING_FACTOR.into();
-            // going to divide the Price scaling factor to get the actual token amount
-            let total_price_u256: u256 = price.into() / PRICE_SCALING_FACTOR.into();
+            let price_in_tokens: u256 = (total_price.into() * 1000000000000000000_u256)
+                / PRICE_SCALING_FACTOR.into();
 
-            // we need to convert to wei (10^18)  for strk token
-            let total_price_in_wei: u256 = total_price_u256 * 1000000000000000000;
-
-            // create a dispatcher to interact with the token contract
+            // Create token dispatcher
             let token_dispatcher = IERC20Dispatcher { contract_address: payment_token_address };
 
-            // check if the buyer has enough balance
+            // Check balance
             let balance = token_dispatcher.balance_of(buyer);
-            assert!(balance >= total_price_in_wei, "Insufficient balance");
+            assert!(balance >= price_in_tokens, "Insufficient balance");
 
-            // check if the contract has enough allowance the buyer must approve the contract to
-            // spend their tokens
+            // Check allowance
             let allowance = token_dispatcher.allowance(buyer, contract_address);
-            assert!(allowance >= total_price_in_wei, "Insufficient allowance");
+            assert!(allowance >= price_in_tokens, "Insufficient allowance");
 
-            // transfer the tokens from the buyer to the contract
-            token_dispatcher.transfer_from(buyer, contract_address, total_price_in_wei);
+            // Transfer tokens from buyer to contract
+            let transfer_result = token_dispatcher
+                .transfer_from(buyer, contract_address, price_in_tokens);
+            assert!(transfer_result, "Token transfer failed");
 
-            // update the item quantity
-            let mut item = self.store.read(productId);
-            item.quantity -= quantity;
-            self.store.write(productId, item);
+            // Update item quantity
+            let mut updated_item = item;
+            updated_item.quantity -= quantity;
+            self.store.write(productId, updated_item);
 
             true
         }
