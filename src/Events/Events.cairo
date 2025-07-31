@@ -1,7 +1,8 @@
+use starknet::ContractAddress;
 
 #[derive(Drop, starknet::Event)]
 pub struct PurchaseMade {
-   pub buyer: ContractAddress,
+    pub buyer: ContractAddress,
     pub product_id: u32,
     pub product_name: felt252,
     pub quantity: u32,

@@ -3,6 +3,7 @@
 
 const PAUSER_ROLE: felt252 = selector!("PAUSER_ROLE");
 const UPGRADER_ROLE: felt252 = selector!("UPGRADER_ROLE");
+const STRK_USD_ASSET_ID: felt252 = 6004514686061859652; // STRK/USD pair ID for Pragma Oracle
 
 
 #[starknet::contract]
@@ -12,6 +13,8 @@ pub mod Store {
     use openzeppelin::security::pausable::PausableComponent;
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
     use openzeppelin::upgrades::UpgradeableComponent;
+    use pragma_lib::abi::{IPragmaABIDispatcher, IPragmaABIDispatcherTrait};
+use pragma_lib::types::{DataType, PragmaPricesResponse};
     use openzeppelin::upgrades::interface::IUpgradeable;
     use starknet::storage::{
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
@@ -26,7 +29,7 @@ pub mod Store {
     // incontract calls
     use store::interfaces::Istore::IStore;
     use store::structs::Struct::Items;
-    use super::{PAUSER_ROLE, UPGRADER_ROLE};
+    use super::{PAUSER_ROLE, UPGRADER_ROLE, STRK_USD_ASSET_ID};
 
 
     component!(path: PausableComponent, storage: pausable, event: PausableEvent);
@@ -63,6 +66,8 @@ pub mod Store {
         product_name_to_id: Map<felt252, u32>,
         //payment
         payment_token_address: ContractAddress,
+        //pragma oracle
+        pragma_oracle_address: ContractAddress,
     }
 
     #[event]
@@ -177,50 +182,62 @@ pub mod Store {
             let buyer = get_caller_address();
 
             // Verify the product exists
-            assert!(productId <= self.store_count.read(), "Product does not exist");
+            assert(productId <= self.store_count.read(), 'Product does not exist');
 
             // Get the item from storage
             let item = self.store.read(productId);
 
             // Calculate the total price
             let total_price = item.price * quantity;
-            assert!(total_price == expected_price, "Invalid price provided");
+            assert(total_price == expected_price, 'Invalid price provided');
 
             // Verify there's enough quantity
-            assert!(item.quantity >= quantity, "Not enough quantity available");
+            assert(item.quantity >= quantity, 'Not enough quantity available');
 
             // Handle payment
             let payment_token_address = self.payment_token_address.read();
             let contract_address = get_contract_address();
 
-            // Convert price from USD cents to STRK tokens
+            // Get live STRK/USD price from Pragma Oracle
+            let oracle_dispatcher = IPragmaABIDispatcher { 
+                contract_address: self.pragma_oracle_address.read() 
+            };
+            
+            // Get STRK/USD price (returns price with 8 decimals)
+            let price_response: PragmaPricesResponse = oracle_dispatcher
+                .get_data_median(DataType::SpotEntry(STRK_USD_ASSET_ID));
+            let strk_usd_price = price_response.price; // Price in USD with 8 decimals (e.g., 150000000 = $1.50)
+            
+            // Convert price from USD cents to STRK tokens using live oracle price
             // Frontend shows $1.50, backend stores 150 (cents)
-            // STRK has 18 decimals, so 1 STRK = 1e18 wei
-            // Assuming 1 USD = 1 STRK for simplicity (you can add oracle later)
+            // Oracle returns price with 8 decimals, STRK has 18 decimals
             
             const CENTS_TO_DOLLARS: u32 = 100;  // 100 cents = 1 dollar
-            const STRK_DECIMALS: u256 = 1000000000000000000; // 1e18
+            const ORACLE_DECIMALS: u256 = 100000000; // 1e8 (oracle price decimals)
+            const STRK_DECIMALS: u256 = 1000000000000000000; // 1e18 (STRK token decimals)
             
-            // Convert: cents -> dollars -> STRK tokens (with 18 decimals)
-            // Example: 150 cents -> 1.5 dollars -> 1.5 * 1e18 STRK wei
+            // Convert: cents -> dollars -> STRK tokens using live price
+            // Example: 150 cents, STRK price = $1.50 -> need 1 STRK token
+            // Formula: (price_in_dollars * STRK_DECIMALS) / (strk_usd_price / ORACLE_DECIMALS)
             let price_in_dollars: u256 = total_price.into() / CENTS_TO_DOLLARS.into();
-            let price_in_tokens: u256 = price_in_dollars * STRK_DECIMALS;
+            let price_in_tokens: u256 = (price_in_dollars * STRK_DECIMALS * ORACLE_DECIMALS) 
+                / strk_usd_price.into();
 
             // Create token dispatcher
             let token_dispatcher = IERC20Dispatcher { contract_address: payment_token_address };
 
             // Check balance
             let balance = token_dispatcher.balance_of(buyer);
-            assert!(balance >= price_in_tokens, "Insufficient balance");
+            assert(balance >= price_in_tokens, 'Insufficient balance');
 
             // Check allowance
             let allowance = token_dispatcher.allowance(buyer, contract_address);
-            assert!(allowance >= price_in_tokens, "Insufficient allowance");
+            assert(allowance >= price_in_tokens, 'Insufficient allowance');
 
             // Transfer tokens from buyer to contract
             let transfer_result = token_dispatcher
                 .transfer_from(buyer, contract_address, price_in_tokens);
-            assert!(transfer_result, "Token transfer failed");
+            assert(transfer_result, 'Token transfer failed');
 
             // Update item quantity
             let mut updated_item = item;
