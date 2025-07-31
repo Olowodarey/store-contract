@@ -10,3 +10,9 @@ pub mod interfaces {
 pub mod structs {
     pub mod Struct;
 }
+
+pub mod Events {
+    pub mod Events;
+    
+    }
+

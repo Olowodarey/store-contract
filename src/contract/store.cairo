@@ -20,6 +20,7 @@ pub mod Store {
     use starknet::{
         ClassHash, ContractAddress, get_block_timestamp, get_caller_address, get_contract_address,
     };
+    use store::Events::Events::{PurchaseMade};
 
 
     // incontract calls
@@ -75,7 +76,9 @@ pub mod Store {
         SRC5Event: SRC5Component::Event,
         #[flat]
         UpgradeableEvent: UpgradeableComponent::Event,
+        PurchaseMade: PurchaseMade,
     }
+
 
     #[constructor]
     fn constructor(
@@ -190,11 +193,18 @@ pub mod Store {
             let payment_token_address = self.payment_token_address.read();
             let contract_address = get_contract_address();
 
-            // Convert price using proper scaling
-            // Assuming item.price is stored as price * PRICE_SCALING_FACTOR
-            const PRICE_SCALING_FACTOR: u32 = 1000;
-            let price_in_tokens: u256 = (total_price.into() * 1000000000000000000_u256)
-                / PRICE_SCALING_FACTOR.into();
+            // Convert price from USD cents to STRK tokens
+            // Frontend shows $1.50, backend stores 150 (cents)
+            // STRK has 18 decimals, so 1 STRK = 1e18 wei
+            // Assuming 1 USD = 1 STRK for simplicity (you can add oracle later)
+            
+            const CENTS_TO_DOLLARS: u32 = 100;  // 100 cents = 1 dollar
+            const STRK_DECIMALS: u256 = 1000000000000000000; // 1e18
+            
+            // Convert: cents -> dollars -> STRK tokens (with 18 decimals)
+            // Example: 150 cents -> 1.5 dollars -> 1.5 * 1e18 STRK wei
+            let price_in_dollars: u256 = total_price.into() / CENTS_TO_DOLLARS.into();
+            let price_in_tokens: u256 = price_in_dollars * STRK_DECIMALS;
 
             // Create token dispatcher
             let token_dispatcher = IERC20Dispatcher { contract_address: payment_token_address };
@@ -216,6 +226,17 @@ pub mod Store {
             let mut updated_item = item;
             updated_item.quantity -= quantity;
             self.store.write(productId, updated_item);
+
+            // Emit purchase event
+            self.emit(PurchaseMade {
+                buyer,
+                product_id: productId,
+                product_name: item.productname,
+                quantity,
+                total_price_cents: total_price,
+                total_price_tokens: price_in_tokens,
+                timestamp: get_block_timestamp(),
+            });
 
             true
         }
