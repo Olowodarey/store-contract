@@ -252,9 +252,9 @@ pub mod Store {
             let buyer_balance = token_dispatcher.balance_of(buyer);
             assert(buyer_balance >= payment_amount, 'Insufficient balance');
 
-            // User transfers tokens directly to contract
-            // This eliminates the need for approval since user calls transfer directly
-            let transfer_result = token_dispatcher.transfer(contract_address, payment_amount);
+            // Transfer tokens from buyer to contract
+            // Use transfer_from to move tokens from buyer's wallet to the contract
+            let transfer_result = token_dispatcher.transfer_from(buyer, contract_address, payment_amount);
             assert(transfer_result, 'Token transfer failed');
 
             // Update item quantity
