@@ -13,9 +13,9 @@ pub mod Store {
     use openzeppelin::security::pausable::PausableComponent;
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
     use openzeppelin::upgrades::UpgradeableComponent;
-    use pragma_lib::abi::{IPragmaABIDispatcher, IPragmaABIDispatcherTrait};
-use pragma_lib::types::{DataType, PragmaPricesResponse};
     use openzeppelin::upgrades::interface::IUpgradeable;
+    use pragma_lib::abi::{IPragmaABIDispatcher, IPragmaABIDispatcherTrait};
+    use pragma_lib::types::{DataType, PragmaPricesResponse};
     use starknet::storage::{
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
         StoragePointerWriteAccess,
@@ -23,13 +23,13 @@ use pragma_lib::types::{DataType, PragmaPricesResponse};
     use starknet::{
         ClassHash, ContractAddress, get_block_timestamp, get_caller_address, get_contract_address,
     };
-    use store::Events::Events::{PurchaseMade};
+    use store::Events::Events::PurchaseMade;
 
 
     // incontract calls
     use store::interfaces::Istore::IStore;
     use store::structs::Struct::Items;
-    use super::{PAUSER_ROLE, UPGRADER_ROLE, STRK_USD_ASSET_ID};
+    use super::{PAUSER_ROLE, STRK_USD_ASSET_ID, UPGRADER_ROLE};
 
 
     component!(path: PausableComponent, storage: pausable, event: PausableEvent);
@@ -87,8 +87,8 @@ use pragma_lib::types::{DataType, PragmaPricesResponse};
 
     #[constructor]
     fn constructor(
-        ref self: ContractState, 
-        default_admin: ContractAddress, 
+        ref self: ContractState,
+        default_admin: ContractAddress,
         token_address: ContractAddress,
         oracle_address: ContractAddress,
     ) {
@@ -100,7 +100,7 @@ use pragma_lib::types::{DataType, PragmaPricesResponse};
 
         // Setting the payment token address
         self.payment_token_address.write(token_address);
-        
+
         // Setting the pragma oracle address
         self.pragma_oracle_address.write(oracle_address);
     }
@@ -191,7 +191,11 @@ use pragma_lib::types::{DataType, PragmaPricesResponse};
         }
 
         fn buy_product(
-            ref self: ContractState, productId: u32, quantity: u32, expected_price: u32,
+            ref self: ContractState,
+            productId: u32,
+            quantity: u32,
+            expected_price: u32,
+            payment_amount: u256,
         ) -> bool {
             let buyer = get_caller_address();
 
@@ -213,44 +217,44 @@ use pragma_lib::types::{DataType, PragmaPricesResponse};
             let contract_address = get_contract_address();
 
             // Get live STRK/USD price from Pragma Oracle
-            let oracle_dispatcher = IPragmaABIDispatcher { 
-                contract_address: self.pragma_oracle_address.read() 
+            let oracle_dispatcher = IPragmaABIDispatcher {
+                contract_address: self.pragma_oracle_address.read(),
             };
-            
+
             // Get STRK/USD price (returns price with 8 decimals)
             let price_response: PragmaPricesResponse = oracle_dispatcher
                 .get_data_median(DataType::SpotEntry(STRK_USD_ASSET_ID));
-            let strk_usd_price = price_response.price; // Price in USD with 8 decimals (e.g., 150000000 = $1.50)
-            
+            let strk_usd_price = price_response
+                .price; // Price in USD with 8 decimals (e.g., 150000000 = $1.50)
+
             // Convert price from USD cents to STRK tokens using live oracle price
             // Frontend shows $1.50, backend stores 150 (cents)
             // Oracle returns price with 8 decimals, STRK has 18 decimals
-            
-            const CENTS_TO_DOLLARS: u32 = 100;  // 100 cents = 1 dollar
+
+            const CENTS_TO_DOLLARS: u32 = 100; // 100 cents = 1 dollar
             const ORACLE_DECIMALS: u256 = 100000000; // 1e8 (oracle price decimals)
             const STRK_DECIMALS: u256 = 1000000000000000000; // 1e18 (STRK token decimals)
-            
+
             // Convert: cents -> dollars -> STRK tokens using live price
             // Example: 150 cents, STRK price = $1.50 -> need 1 STRK token
             // Formula: (price_in_dollars * STRK_DECIMALS) / (strk_usd_price / ORACLE_DECIMALS)
             let price_in_dollars: u256 = total_price.into() / CENTS_TO_DOLLARS.into();
-            let price_in_tokens: u256 = (price_in_dollars * STRK_DECIMALS * ORACLE_DECIMALS) 
+            let price_in_tokens: u256 = (price_in_dollars * STRK_DECIMALS * ORACLE_DECIMALS)
                 / strk_usd_price.into();
+
+            // Verify payment amount is sufficient
+            assert(payment_amount >= price_in_tokens, 'Insufficient payment amount');
 
             // Create token dispatcher
             let token_dispatcher = IERC20Dispatcher { contract_address: payment_token_address };
 
-            // Check balance
-            let balance = token_dispatcher.balance_of(buyer);
-            assert(balance >= price_in_tokens, 'Insufficient balance');
+            // Check buyer's balance
+            let buyer_balance = token_dispatcher.balance_of(buyer);
+            assert(buyer_balance >= payment_amount, 'Insufficient balance');
 
-            // Check allowance
-            let allowance = token_dispatcher.allowance(buyer, contract_address);
-            assert(allowance >= price_in_tokens, 'Insufficient allowance');
-
-            // Transfer tokens from buyer to contract
-            let transfer_result = token_dispatcher
-                .transfer_from(buyer, contract_address, price_in_tokens);
+            // User transfers tokens directly to contract
+            // This eliminates the need for approval since user calls transfer directly
+            let transfer_result = token_dispatcher.transfer(contract_address, payment_amount);
             assert(transfer_result, 'Token transfer failed');
 
             // Update item quantity
@@ -259,15 +263,18 @@ use pragma_lib::types::{DataType, PragmaPricesResponse};
             self.store.write(productId, updated_item);
 
             // Emit purchase event
-            self.emit(PurchaseMade {
-                buyer,
-                product_id: productId,
-                product_name: item.productname,
-                quantity,
-                total_price_cents: total_price,
-                total_price_tokens: price_in_tokens,
-                timestamp: get_block_timestamp(),
-            });
+            self
+                .emit(
+                    PurchaseMade {
+                        buyer,
+                        product_id: productId,
+                        product_name: item.productname,
+                        quantity,
+                        total_price_cents: total_price,
+                        total_price_tokens: price_in_tokens,
+                        timestamp: get_block_timestamp(),
+                    },
+                );
 
             true
         }

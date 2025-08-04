@@ -1,7 +1,7 @@
 pub mod contract {
+    pub mod MockOracle;
     pub mod mockToken;
     pub mod store;
-    pub mod MockOracle;
 }
 
 pub mod interfaces {
@@ -14,6 +14,5 @@ pub mod structs {
 
 pub mod Events {
     pub mod Events;
-    
-    }
+}
 

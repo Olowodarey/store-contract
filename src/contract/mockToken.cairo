@@ -5,8 +5,8 @@
 mod Olowotoken {
     use openzeppelin::access::ownable::OwnableComponent;
     use openzeppelin::token::erc20::{DefaultConfig, ERC20Component, ERC20HooksEmptyImpl};
-    use openzeppelin::upgrades::interface::IUpgradeable;
     use openzeppelin::upgrades::UpgradeableComponent;
+    use openzeppelin::upgrades::interface::IUpgradeable;
     use starknet::{ClassHash, ContractAddress};
 
     component!(path: ERC20Component, storage: erc20, event: ERC20Event);
@@ -65,7 +65,7 @@ mod Olowotoken {
     //
     // Upgradeable
     //
-    
+
     #[abi(embed_v0)]
     impl UpgradeableImpl of IUpgradeable<ContractState> {
         fn upgrade(ref self: ContractState, new_class_hash: ClassHash) {
@@ -74,38 +74,4 @@ mod Olowotoken {
         }
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 

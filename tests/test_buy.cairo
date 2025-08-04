@@ -39,9 +39,9 @@ fn setup_with_token() -> (ContractAddress, ContractAddress, ContractAddress) {
 
     let contract_class = declare_result.unwrap().contract_class();
     let mut calldata = array![
-        owner.into(),                   // admin
-        token_address.into(),           // token address  
-        oracle_address.into()           // mock oracle address
+        owner.into(), // admin
+        token_address.into(), // token address  
+        oracle_address.into() // mock oracle address
     ];
 
     let deploy_result = contract_class.deploy(@calldata);
@@ -53,24 +53,22 @@ fn setup_with_token() -> (ContractAddress, ContractAddress, ContractAddress) {
 }
 
 
-
-
 #[test]
 fn test_contract_deployment() {
     let (contract_address, owner, token_address) = setup_with_token();
     let dispatcher = IStoreDispatcher { contract_address };
-    
+
     // Test adding an item (this should work without oracle calls)
     start_cheat_caller_address(contract_address, owner);
     dispatcher.add_item('Apple', 150, 100, 'apple_img'); // $1.50 stored as 150 cents
     stop_cheat_caller_address(contract_address);
-    
+
     // Verify item was added
     let item = dispatcher.get_item(1);
     assert(item.productname == 'Apple', 'Product name should match');
     assert(item.price == 150, 'Price should be 150 cents');
     assert(item.quantity == 100, 'Quantity should be 100');
-    
+
     // Verify store count
     let total_items = dispatcher.get_total_items();
     assert(total_items == 1, 'Should have 1 item');

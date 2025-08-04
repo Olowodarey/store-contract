@@ -7,16 +7,13 @@ trait IMockOracle<TContractState> {
 }
 
 
-
-
 #[starknet::contract]
 mod MockOracle {
-    use super::IMockOracle;
-
     use starknet::storage::{
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
         StoragePointerWriteAccess,
     };
+    use super::IMockOracle;
 
     #[storage]
     struct Storage {
@@ -36,7 +33,7 @@ mod MockOracle {
             let timestamp = 1234567890_u64;
             let num_sources = 1_u32;
             let decimals = 8_u32;
-            
+
             (price, timestamp, num_sources, decimals)
         }
     }
