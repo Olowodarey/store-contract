@@ -87,7 +87,10 @@ use pragma_lib::types::{DataType, PragmaPricesResponse};
 
     #[constructor]
     fn constructor(
-        ref self: ContractState, default_admin: ContractAddress, token_address: ContractAddress,
+        ref self: ContractState, 
+        default_admin: ContractAddress, 
+        token_address: ContractAddress,
+        oracle_address: ContractAddress,
     ) {
         self.accesscontrol.initializer();
 
@@ -95,8 +98,11 @@ use pragma_lib::types::{DataType, PragmaPricesResponse};
         self.accesscontrol._grant_role(PAUSER_ROLE, default_admin);
         self.accesscontrol._grant_role(UPGRADER_ROLE, default_admin);
 
-        // seting the payment token address
+        // Setting the payment token address
         self.payment_token_address.write(token_address);
+        
+        // Setting the pragma oracle address
+        self.pragma_oracle_address.write(oracle_address);
     }
 
     #[generate_trait]
@@ -175,6 +181,14 @@ use pragma_lib::types::{DataType, PragmaPricesResponse};
             all_items
         }
 
+        // Getter functions for debugging and verification
+        fn get_token_address(self: @ContractState) -> ContractAddress {
+            self.payment_token_address.read()
+        }
+
+        fn get_oracle_address(self: @ContractState) -> ContractAddress {
+            self.pragma_oracle_address.read()
+        }
 
         fn buy_product(
             ref self: ContractState, productId: u32, quantity: u32, expected_price: u32,

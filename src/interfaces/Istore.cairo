@@ -12,4 +12,7 @@ pub trait IStore<TContractState> {
     fn buy_product(
         ref self: TContractState, productId: u32, quantity: u32, expected_price: u32,
     ) -> bool;
+    // Getter functions for debugging and verification
+    fn get_token_address(self: @TContractState) -> starknet::ContractAddress;
+    fn get_oracle_address(self: @TContractState) -> starknet::ContractAddress;
 }
