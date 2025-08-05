@@ -12,6 +12,7 @@ pub mod Store {
     use openzeppelin::introspection::src5::SRC5Component;
     use openzeppelin::security::pausable::PausableComponent;
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
+    use openzeppelin::token::erc721::{ERC721Component, ERC721HooksEmptyImpl};
     use openzeppelin::upgrades::UpgradeableComponent;
     use openzeppelin::upgrades::interface::IUpgradeable;
     use pragma_lib::abi::{IPragmaABIDispatcher, IPragmaABIDispatcherTrait};
@@ -28,7 +29,7 @@ pub mod Store {
 
     // incontract calls
     use store::interfaces::Istore::IStore;
-    use store::structs::Struct::Items;
+    use store::structs::Struct::{CartItem, Items, PurchaseReceipt};
     use super::{PAUSER_ROLE, STRK_USD_ASSET_ID, UPGRADER_ROLE};
 
 
@@ -36,6 +37,7 @@ pub mod Store {
     component!(path: AccessControlComponent, storage: accesscontrol, event: AccessControlEvent);
     component!(path: SRC5Component, storage: src5, event: SRC5Event);
     component!(path: UpgradeableComponent, storage: upgradeable, event: UpgradeableEvent);
+    component!(path: ERC721Component, storage: erc721, event: ERC721Event);
 
     // External
     #[abi(embed_v0)]
@@ -44,10 +46,14 @@ pub mod Store {
     impl AccessControlMixinImpl =
         AccessControlComponent::AccessControlMixinImpl<ContractState>;
 
+    impl ERC721MixinImpl = ERC721Component::ERC721MixinImpl<ContractState>;
+
     // Internal
     impl PausableInternalImpl = PausableComponent::InternalImpl<ContractState>;
     impl AccessControlInternalImpl = AccessControlComponent::InternalImpl<ContractState>;
     impl UpgradeableInternalImpl = UpgradeableComponent::InternalImpl<ContractState>;
+    impl ERC721InternalImpl = ERC721Component::InternalImpl<ContractState>;
+
 
     #[storage]
     struct Storage {
@@ -59,6 +65,8 @@ pub mod Store {
         src5: SRC5Component::Storage,
         #[substorage(v0)]
         upgradeable: UpgradeableComponent::Storage,
+        #[substorage(v0)]
+        erc721: ERC721Component::Storage,
         // contract storage
         store_count: u32,
         store: Map<u32, Items>,
@@ -68,6 +76,17 @@ pub mod Store {
         payment_token_address: ContractAddress,
         //pragma oracle
         pragma_oracle_address: ContractAddress,
+        //receipt NFT storage
+        receipt_count: u256,
+        receipts: Map<u256, PurchaseReceipt>,
+        user_receipts: Map<(ContractAddress, u256), u256>, // (user, index) -> receipt_id
+        user_receipt_count: Map<ContractAddress, u256>, // user -> number of receipts
+        // Track purchases that can be minted as receipts
+        purchase_count: u256,
+        purchases: Map<u256, PurchaseReceipt>, // purchase_id -> purchase data
+        user_purchases: Map<(ContractAddress, u256), u256>, // (user, index) -> purchase_id
+        user_purchase_count: Map<ContractAddress, u256>, // user -> number of purchases
+        purchase_minted: Map<u256, bool> // purchase_id -> is_minted as NFT
     }
 
     #[event]
@@ -81,6 +100,8 @@ pub mod Store {
         SRC5Event: SRC5Component::Event,
         #[flat]
         UpgradeableEvent: UpgradeableComponent::Event,
+        #[flat]
+        ERC721Event: ERC721Component::Event,
         PurchaseMade: PurchaseMade,
     }
 
@@ -176,7 +197,8 @@ pub mod Store {
 
             // Iterate through all items and add them to the array
             let mut i: u32 = 1;
-            while i <= total_items {
+            let end_index = total_items + 1;
+            while i != end_index {
                 let item = self.store.read(i);
                 all_items.append(item);
                 i += 1;
@@ -268,6 +290,27 @@ pub mod Store {
             updated_item.quantity -= quantity;
             self.store.write(productId, updated_item);
 
+            // Store purchase data for receipt minting
+            let purchase_id = self.purchase_count.read() + 1;
+            self.purchase_count.write(purchase_id);
+
+            let purchase_data = PurchaseReceipt {
+                receipt_id: 0, // Will be set when minted
+                buyer,
+                product_id: productId,
+                product_name,
+                quantity,
+                total_price_cents: total_price,
+                total_price_tokens: price_in_tokens,
+                timestamp: get_block_timestamp(),
+            };
+
+            // Store purchase
+            self.purchases.write(purchase_id, purchase_data);
+
+            // Add to user's purchase history
+            self._add_purchase_to_user(buyer, purchase_id);
+
             // Emit purchase event
             self
                 .emit(
@@ -282,6 +325,144 @@ pub mod Store {
                     },
                 );
 
+            true
+        }
+
+
+        fn buy_multiple_products(
+            ref self: ContractState, cart_items: Array<CartItem>, total_payment_amount: u256,
+        ) -> bool {
+            let buyer = get_caller_address();
+
+            // Validate cart is not empty
+            assert(cart_items.len() > 0, 'Cart cannot be empty');
+
+            // Get live STRK/USD price from Pragma Oracle once for all items
+            let oracle_dispatcher = IPragmaABIDispatcher {
+                contract_address: self.pragma_oracle_address.read(),
+            };
+
+            let price_response: PragmaPricesResponse = oracle_dispatcher
+                .get_data_median(DataType::SpotEntry(STRK_USD_ASSET_ID));
+            let strk_usd_price = price_response.price;
+
+            // Constants for price conversion
+            const CENTS_TO_DOLLARS: u32 = 100;
+            const ORACLE_DECIMALS: u256 = 100000000; // 1e8
+            const STRK_DECIMALS: u256 = 1000000000000000000; // 1e18
+
+            let mut total_price_cents: u32 = 0;
+            let mut i = 0;
+            let cart_items_len = cart_items.len();
+
+            // First pass: validate all items and calculate total price
+            while i != cart_items_len {
+                let cart_item = cart_items.at(i);
+                let product_id = *cart_item.product_id;
+                let quantity = *cart_item.quantity;
+                let expected_price = *cart_item.expected_price;
+
+                // Verify the product exists
+                assert(product_id <= self.store_count.read(), 'Product does not exist');
+
+                // Get the item from storage
+                let item = self.store.read(product_id);
+
+                // Verify price matches
+                assert(item.price == expected_price, 'Price mismatch');
+
+                // Verify there's enough quantity
+                assert(item.quantity >= quantity, 'Not enough quantity available');
+
+                // Add to total price
+                total_price_cents += item.price * quantity;
+
+                i += 1;
+            }
+
+            // Convert total price to STRK tokens
+            let price_in_dollars: u256 = total_price_cents.into() / CENTS_TO_DOLLARS.into();
+            let total_price_tokens: u256 = (price_in_dollars * STRK_DECIMALS * ORACLE_DECIMALS)
+                / strk_usd_price.into();
+
+            // Verify payment amount is sufficient
+            assert(total_payment_amount >= total_price_tokens, 'Insufficient payment amount');
+
+            // Handle payment
+            let payment_token_address = self.payment_token_address.read();
+            let contract_address = get_contract_address();
+            let token_dispatcher = IERC20Dispatcher { contract_address: payment_token_address };
+
+            // Check buyer's balance
+            let buyer_balance = token_dispatcher.balance_of(buyer);
+            assert(buyer_balance >= total_payment_amount, 'Insufficient balance');
+
+            // Transfer tokens from buyer to contract
+            let transfer_result = token_dispatcher
+                .transfer_from(buyer, contract_address, total_payment_amount);
+            assert(transfer_result, 'Token transfer failed');
+
+            // Second pass: update quantities and emit events
+            let mut j = 0;
+            let cart_items_len = cart_items.len();
+            while j != cart_items_len {
+                let cart_item = cart_items.at(j);
+                let product_id = *cart_item.product_id;
+                let quantity = *cart_item.quantity;
+
+                // Get and update item quantity
+                let item = self.store.read(product_id);
+                let mut updated_item = item;
+                updated_item.quantity -= quantity;
+                self.store.write(product_id, updated_item);
+
+                // Calculate individual item total price
+                let item = self.store.read(product_id);
+                let mut _updated_item = item.clone(); // Clone instead of move
+                let item_total_price = item.price * quantity;
+                let item_price_in_dollars: u256 = item_total_price.into() / CENTS_TO_DOLLARS.into();
+                let item_price_tokens: u256 = (item_price_in_dollars
+                    * STRK_DECIMALS
+                    * ORACLE_DECIMALS)
+                    / strk_usd_price.into();
+
+                // Store purchase data for receipt minting
+                let purchase_id = self.purchase_count.read() + 1;
+                self.purchase_count.write(purchase_id);
+
+                let purchase_data = PurchaseReceipt {
+                    receipt_id: 0, // Will be set when minted
+                    buyer,
+                    product_id,
+                    product_name: item.productname,
+                    quantity,
+                    total_price_cents: item_total_price,
+                    total_price_tokens: item_price_tokens,
+                    timestamp: get_block_timestamp(),
+                };
+
+                // Store purchase
+                self.purchases.write(purchase_id, purchase_data);
+
+                // Add to user's purchase history
+                self._add_purchase_to_user(buyer, purchase_id);
+
+                // Emit purchase event for each item
+                self
+                    .emit(
+                        PurchaseMade {
+                            buyer,
+                            product_id,
+                            product_name: item.productname,
+                            quantity,
+                            total_price_cents: item_total_price,
+                            total_price_tokens: item_price_tokens,
+                            timestamp: get_block_timestamp(),
+                        },
+                    );
+
+                j += 1;
+            }
             true
         }
 
@@ -305,6 +486,95 @@ pub mod Store {
             };
             token_dispatcher.transfer(recipient, amount);
             true
+        }
+
+        fn get_user_receipts(self: @ContractState, user: ContractAddress) -> Array<u256> {
+            let receipt_count = self.user_receipt_count.read(user);
+            let mut receipts = ArrayTrait::new();
+            let mut i: u256 = 0;
+
+            while i != receipt_count {
+                let receipt_id = self.user_receipts.read((user, i));
+                receipts.append(receipt_id);
+                i += 1;
+            }
+
+            receipts
+        }
+
+        fn mint_receipt(ref self: ContractState, purchase_id: u256) -> bool {
+            let buyer = get_caller_address();
+
+            // Verify purchase exists
+            assert(purchase_id <= self.purchase_count.read(), 'Purchase does not exist');
+
+            // Verify purchase is not already minted
+            assert(!self.purchase_minted.read(purchase_id), 'Purchase already minted');
+
+            // Get purchase data
+            let mut purchase_data = self.purchases.read(purchase_id);
+
+            // Verify buyer is the owner of the purchase
+            assert(purchase_data.buyer == buyer, 'Not purchase owner');
+
+            // Generate new receipt ID and update purchase data
+            let receipt_id = self.receipt_count.read() + 1;
+            self.receipt_count.write(receipt_id);
+            purchase_data.receipt_id = receipt_id;
+
+            // Store as receipt NFT
+            self.receipts.write(receipt_id, purchase_data);
+
+            // Add to user's receipt collection
+            self._add_receipt_to_user(buyer, receipt_id);
+
+            // Mark purchase as minted
+            self.purchase_minted.write(purchase_id, true);
+
+            // Mint ERC721 NFT
+            self.erc721.mint(buyer, receipt_id);
+
+            true
+        }
+
+        fn get_user_purchases(self: @ContractState, user: ContractAddress) -> Array<u256> {
+            let purchase_count = self.user_purchase_count.read(user);
+            let mut purchases = ArrayTrait::new();
+            let mut i: u256 = 0;
+
+            while i != purchase_count {
+                let purchase_id = self.user_purchases.read((user, i));
+                purchases.append(purchase_id);
+                i += 1;
+            }
+
+            purchases
+        }
+
+        fn get_purchase_count(self: @ContractState) -> u256 {
+            self.purchase_count.read()
+        }
+
+        fn is_purchase_minted(self: @ContractState, purchase_id: u256) -> bool {
+            self.purchase_minted.read(purchase_id)
+        }
+    }
+
+
+    #[generate_trait]
+    impl InternalImpl of InternalTrait {
+        fn _add_receipt_to_user(ref self: ContractState, user: ContractAddress, receipt_id: u256) {
+            let current_count = self.user_receipt_count.read(user);
+            self.user_receipts.write((user, current_count), receipt_id);
+            self.user_receipt_count.write(user, current_count + 1);
+        }
+
+        fn _add_purchase_to_user(
+            ref self: ContractState, user: ContractAddress, purchase_id: u256,
+        ) {
+            let current_count = self.user_purchase_count.read(user);
+            self.user_purchases.write((user, current_count), purchase_id);
+            self.user_purchase_count.write(user, current_count + 1);
         }
     }
 }

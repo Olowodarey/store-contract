@@ -6,7 +6,7 @@ use snforge_std::{
 use starknet::{ContractAddress, contract_address_const};
 use store::contract::store::Store;
 use store::interfaces::Istore::{IStoreDispatcher, IStoreDispatcherTrait};
-use store::structs::Struct::Items;
+use store::structs::Struct::{CartItem, Items};
 
 // Constants for token amounts
 const TOKENS_PER_UNIT: u256 = 1000000000000000000; // 1 token in wei
@@ -50,6 +50,51 @@ fn setup_with_token() -> (ContractAddress, ContractAddress, ContractAddress) {
     let (contract_address, _) = deploy_result.unwrap();
 
     (contract_address, owner, token_address)
+}
+
+
+fn setup_store_with_items() -> (ContractAddress, ContractAddress, ContractAddress) {
+    // create default admin address
+    let owner: ContractAddress = contract_address_const::<'1'>();
+
+    // Deploy mock token for payment
+    let token_class = declare("Olowotoken").unwrap().contract_class();
+    let (token_address, _) = token_class
+        .deploy(@array![owner.into() // owner (simplified constructor)
+        ])
+        .unwrap();
+
+    // Deploy MockOracle contract for testing
+    let oracle_class = declare("MockOracle").unwrap().contract_class();
+    let (oracle_address, _) = oracle_class
+        .deploy(@array![150000000_u128.into()]) // $1.50 with 8 decimals = 150000000
+        .unwrap();
+
+    // deploy store contract with mock oracle address
+    let declare_result = declare("Store");
+    assert(declare_result.is_ok(), 'contract declaration failed');
+
+    let contract_class = declare_result.unwrap().contract_class();
+    let mut calldata = array![
+        owner.into(), // admin
+        token_address.into(), // token address  
+        oracle_address.into() // mock oracle address
+    ];
+
+    let deploy_result = contract_class.deploy(@calldata);
+    assert(deploy_result.is_ok(), 'contract deployment failed');
+
+    let (store_address, _) = deploy_result.unwrap();
+    let store = IStoreDispatcher { contract_address: store_address };
+
+    // Pre-populate store with test items
+    start_cheat_caller_address(store_address, owner);
+    store.add_item('Apple', 150, 10, "apple_img"); // $1.50, product_id: 1
+    store.add_item('Banana', 200, 5, "banana_img"); // $2.00, product_id: 2
+    store.add_item('Orange', 300, 7, "orange_img"); // $3.00, product_id: 3
+    stop_cheat_caller_address(store_address);
+
+    (store_address, token_address, oracle_address)
 }
 
 
@@ -148,4 +193,49 @@ fn test_withdraw_insufficient_balance() {
     // This should panic with 'Insufficient contract balance'
     // dispatcher.withdraw_tokens(excessive_amount, owner); // Uncomment to test
     stop_cheat_caller_address(contract_address);
+}
+
+
+#[test]
+fn test_buy_multiple_products_success() {
+    let (store_address, token_address, oracle_address) = setup_store_with_items();
+    let store = IStoreDispatcher { contract_address: store_address };
+
+    let token_dispatcher = IERC20Dispatcher { contract_address: token_address };
+
+    // Setup buyer with tokens
+    let buyer = contract_address_const::<0x123>();
+
+    // Give buyer tokens (using owner from setup)
+    let owner = contract_address_const::<'1'>();
+    start_cheat_caller_address(token_address, owner);
+    token_dispatcher.transfer(buyer, 10000000000000000000); // 10 STRK tokens
+    stop_cheat_caller_address(token_address);
+
+    // Buyer must approve the store contract to spend tokens
+    start_cheat_caller_address(token_address, buyer);
+    token_dispatcher.approve(store_address, 10000000000000000000); // Approve 10 STRK tokens
+    stop_cheat_caller_address(token_address);
+
+    // Create cart with multiple items
+    let mut cart_items = ArrayTrait::new();
+    cart_items.append(CartItem { product_id: 1, quantity: 2, expected_price: 150 }); // $1.50 each
+    cart_items.append(CartItem { product_id: 2, quantity: 1, expected_price: 200 }); // $2.00 each
+
+    // Total: (2 * $1.50) + (1 * $2.00) = $5.00 = 500 cents
+    // At $1.50 per STRK: need ~3.33 STRK tokens
+    let payment_amount = 4000000000000000000; // 4 STRK tokens (with buffer)
+
+    // Execute batch purchase
+    start_cheat_caller_address(store_address, buyer);
+    let result = store.buy_multiple_products(cart_items, payment_amount);
+    stop_cheat_caller_address(store_address);
+
+    assert(result, 'Batch purchase should succeed');
+
+    // Verify quantities were updated
+    let item1 = store.get_item(1);
+    let item2 = store.get_item(2);
+    assert(item1.quantity == 8, 'Item 1 quantity should be 8'); // 10 - 2
+    assert(item2.quantity == 4, 'Item 2 quantity should be 4'); // 5 - 1
 }

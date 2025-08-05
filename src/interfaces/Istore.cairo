@@ -1,4 +1,4 @@
-use store::structs::Struct::Items;
+use store::structs::Struct::{CartItem, Items, PurchaseReceipt};
 
 
 #[starknet::interface]
@@ -16,6 +16,9 @@ pub trait IStore<TContractState> {
         expected_price: u32,
         payment_amount: u256,
     ) -> bool;
+    fn buy_multiple_products(
+        ref self: TContractState, cart_items: Array<CartItem>, total_payment_amount: u256,
+    ) -> bool;
     // Getter functions for debugging and verification
     fn get_token_address(self: @TContractState) -> starknet::ContractAddress;
     fn get_oracle_address(self: @TContractState) -> starknet::ContractAddress;
@@ -23,4 +26,13 @@ pub trait IStore<TContractState> {
     fn withdraw_tokens(
         ref self: TContractState, amount: u256, recipient: starknet::ContractAddress,
     ) -> bool;
+
+
+    // NFT Receipt functions
+
+    fn get_user_receipts(self: @TContractState, user: starknet::ContractAddress) -> Array<u256>;
+    fn mint_receipt(ref self: TContractState, purchase_id: u256) -> bool;
+    fn get_user_purchases(self: @TContractState, user: starknet::ContractAddress) -> Array<u256>;
+    fn get_purchase_count(self: @TContractState) -> u256;
+    fn is_purchase_minted(self: @TContractState, purchase_id: u256) -> bool;
 }
