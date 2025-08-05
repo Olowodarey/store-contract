@@ -4,7 +4,7 @@ use store::structs::Struct::Items;
 #[starknet::interface]
 pub trait IStore<TContractState> {
     fn add_item(
-        ref self: TContractState, productname: felt252, price: u32, quantity: u32, Img: felt252,
+        ref self: TContractState, productname: felt252, price: u32, quantity: u32, Img: ByteArray,
     );
     fn get_item(self: @TContractState, productId: u32) -> Items;
     fn get_total_items(self: @TContractState) -> u32;
@@ -21,9 +21,6 @@ pub trait IStore<TContractState> {
     fn get_oracle_address(self: @TContractState) -> starknet::ContractAddress;
     fn get_contract_balance(self: @TContractState) -> u256;
     fn withdraw_tokens(
-        ref self: TContractState,
-        amount: u256,
-        recipient: starknet::ContractAddress,
+        ref self: TContractState, amount: u256, recipient: starknet::ContractAddress,
     ) -> bool;
-
 }

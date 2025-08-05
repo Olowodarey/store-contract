@@ -10,11 +10,11 @@ trait IMockOracle<TContractState> {
 
 #[starknet::contract]
 mod MockOracle {
+    use pragma_lib::types::{DataType, PragmaPricesResponse};
     use starknet::storage::{
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
         StoragePointerWriteAccess,
     };
-    use pragma_lib::types::{DataType, PragmaPricesResponse};
     use super::IMockOracle;
 
     #[storage]
@@ -32,7 +32,7 @@ mod MockOracle {
         fn get_data_median(self: @ContractState, data_type: DataType) -> PragmaPricesResponse {
             // Return fixed price for testing: $1.50 = 150000000 (with 8 decimals)
             let price = self.mock_price.read();
-            
+
             PragmaPricesResponse {
                 price: price,
                 decimals: 8,
