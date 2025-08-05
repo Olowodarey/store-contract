@@ -278,5 +278,28 @@ pub mod Store {
 
             true
         }
+
+        fn get_contract_balance(self: @ContractState) -> u256 {
+            let token_dispatcher = IERC20Dispatcher { contract_address: self.payment_token_address.read() };
+            token_dispatcher.balance_of(get_contract_address())
+        }
+
+        fn withdraw_tokens(
+            ref self: ContractState,
+            amount: u256,
+            recipient: ContractAddress,
+        ) -> bool {
+
+            self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
+
+            let contract_balance = self.get_contract_balance();
+            assert(amount <= contract_balance, 'Insufficient contract balance');
+
+
+          
+            let token_dispatcher = IERC20Dispatcher { contract_address: self.payment_token_address.read() };
+            token_dispatcher.transfer(recipient, amount);
+            true
+        }
     }
 }

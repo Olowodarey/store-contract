@@ -1,4 +1,4 @@
 // pub mod test_store;
-// pub mod test_buy;
+pub mod test_buy;
 
 
