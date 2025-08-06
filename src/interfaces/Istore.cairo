@@ -35,4 +35,5 @@ pub trait IStore<TContractState> {
     fn get_user_purchases(self: @TContractState, user: starknet::ContractAddress) -> Array<u256>;
     fn get_purchase_count(self: @TContractState) -> u256;
     fn is_purchase_minted(self: @TContractState, purchase_id: u256) -> bool;
+    fn get_purchase_details(self: @TContractState, purchase_id: u256) -> PurchaseReceipt;
 }

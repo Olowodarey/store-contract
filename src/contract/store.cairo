@@ -46,6 +46,12 @@ pub mod Store {
     impl AccessControlMixinImpl =
         AccessControlComponent::AccessControlMixinImpl<ContractState>;
 
+    // Add ERC721 metadata implementation
+    #[abi(embed_v0)]
+    impl ERC721MetadataImpl = ERC721Component::ERC721MetadataImpl<ContractState>;
+    #[abi(embed_v0)]
+    impl ERC721Impl = ERC721Component::ERC721Impl<ContractState>;
+
     impl ERC721MixinImpl = ERC721Component::ERC721MixinImpl<ContractState>;
 
     // Internal
@@ -113,6 +119,9 @@ pub mod Store {
         token_address: ContractAddress,
         oracle_address: ContractAddress,
     ) {
+        // Initialize ERC721 with metadata
+        self.erc721.initializer("Store Purchase Receipts", "RECEIPT", "");
+        
         self.accesscontrol.initializer();
 
         self.accesscontrol._grant_role(DEFAULT_ADMIN_ROLE, default_admin);
@@ -557,6 +566,15 @@ pub mod Store {
 
         fn is_purchase_minted(self: @ContractState, purchase_id: u256) -> bool {
             self.purchase_minted.read(purchase_id)
+        }
+
+        // Get purchase details by ID - fixes frontend display issue
+        fn get_purchase_details(self: @ContractState, purchase_id: u256) -> PurchaseReceipt {
+            // Verify purchase exists
+            assert(purchase_id <= self.purchase_count.read(), 'Purchase does not exist');
+            
+            // Return purchase data
+            self.purchases.read(purchase_id)
         }
     }
 
