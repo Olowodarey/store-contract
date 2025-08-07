@@ -120,7 +120,7 @@ pub mod Store {
         oracle_address: ContractAddress,
     ) {
         // Initialize ERC721 with metadata
-        self.erc721.initializer("Store Purchase Receipts", "RECEIPT", "");
+        self.erc721.initializer("Store Purchase Receipts", "RECEIPT", "https://web3-ecommerce-roan.vercel.app/api/nft-metadata/");
         
         self.accesscontrol.initializer();
 
