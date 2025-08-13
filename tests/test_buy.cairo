@@ -27,13 +27,7 @@ fn setup_with_token() -> (ContractAddress, ContractAddress, ContractAddress) {
         ])
         .unwrap();
 
-    // Deploy MockOracle contract for testing
-    let oracle_class = declare("MockOracle").unwrap().contract_class();
-    let (oracle_address, _) = oracle_class
-        .deploy(@array![150000000_u128.into()]) // $1.50 with 8 decimals = 150000000
-        .unwrap();
-
-    // deploy store contract with mock oracle address
+   
     let declare_result = declare("Store");
     assert(declare_result.is_ok(), 'contract declaration failed');
 
@@ -41,7 +35,6 @@ fn setup_with_token() -> (ContractAddress, ContractAddress, ContractAddress) {
     let mut calldata = array![
         owner.into(), // admin
         token_address.into(), // token address  
-        oracle_address.into() // mock oracle address
     ];
 
     let deploy_result = contract_class.deploy(@calldata);
@@ -64,13 +57,7 @@ fn setup_store_with_items() -> (ContractAddress, ContractAddress, ContractAddres
         ])
         .unwrap();
 
-    // Deploy MockOracle contract for testing
-    let oracle_class = declare("MockOracle").unwrap().contract_class();
-    let (oracle_address, _) = oracle_class
-        .deploy(@array![150000000_u128.into()]) // $1.50 with 8 decimals = 150000000
-        .unwrap();
-
-    // deploy store contract with mock oracle address
+    // deploy store contract (no oracle needed)
     let declare_result = declare("Store");
     assert(declare_result.is_ok(), 'contract declaration failed');
 
@@ -78,7 +65,6 @@ fn setup_store_with_items() -> (ContractAddress, ContractAddress, ContractAddres
     let mut calldata = array![
         owner.into(), // admin
         token_address.into(), // token address  
-        oracle_address.into() // mock oracle address
     ];
 
     let deploy_result = contract_class.deploy(@calldata);
@@ -94,7 +80,7 @@ fn setup_store_with_items() -> (ContractAddress, ContractAddress, ContractAddres
     store.add_item('Orange', 300, 7, "orange_img"); // $3.00, product_id: 3
     stop_cheat_caller_address(store_address);
 
-    (store_address, token_address, oracle_address)
+    (store_address, token_address, owner)
 }
 
 
@@ -198,7 +184,7 @@ fn test_withdraw_insufficient_balance() {
 
 #[test]
 fn test_buy_multiple_products_success() {
-    let (store_address, token_address, oracle_address) = setup_store_with_items();
+    let (store_address, token_address, owner) = setup_store_with_items();
     let store = IStoreDispatcher { contract_address: store_address };
 
     let token_dispatcher = IERC20Dispatcher { contract_address: token_address };
@@ -207,7 +193,6 @@ fn test_buy_multiple_products_success() {
     let buyer = contract_address_const::<0x123>();
 
     // Give buyer tokens (using owner from setup)
-    let owner = contract_address_const::<'1'>();
     start_cheat_caller_address(token_address, owner);
     token_dispatcher.transfer(buyer, 10000000000000000000); // 10 STRK tokens
     stop_cheat_caller_address(token_address);

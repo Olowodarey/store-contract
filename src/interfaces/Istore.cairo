@@ -21,7 +21,6 @@ pub trait IStore<TContractState> {
     ) -> bool;
     // Getter functions for debugging and verification
     fn get_token_address(self: @TContractState) -> starknet::ContractAddress;
-    fn get_oracle_address(self: @TContractState) -> starknet::ContractAddress;
     fn get_contract_balance(self: @TContractState) -> u256;
     fn withdraw_tokens(
         ref self: TContractState, amount: u256, recipient: starknet::ContractAddress,

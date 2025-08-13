@@ -1,5 +1,4 @@
 pub mod contract {
-    pub mod MockOracle;
     pub mod mockToken;
     pub mod store;
 }

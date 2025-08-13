@@ -3,7 +3,6 @@
 
 const PAUSER_ROLE: felt252 = selector!("PAUSER_ROLE");
 const UPGRADER_ROLE: felt252 = selector!("UPGRADER_ROLE");
-const STRK_USD_ASSET_ID: felt252 = 6004514686061859652; // STRK/USD pair ID for Pragma Oracle
 
 
 #[starknet::contract]
@@ -15,8 +14,6 @@ pub mod Store {
     use openzeppelin::token::erc721::{ERC721Component, ERC721HooksEmptyImpl};
     use openzeppelin::upgrades::UpgradeableComponent;
     use openzeppelin::upgrades::interface::IUpgradeable;
-    use pragma_lib::abi::{IPragmaABIDispatcher, IPragmaABIDispatcherTrait};
-    use pragma_lib::types::{DataType, PragmaPricesResponse};
     use starknet::storage::{
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
         StoragePointerWriteAccess,
@@ -30,7 +27,7 @@ pub mod Store {
     // incontract calls
     use store::interfaces::Istore::IStore;
     use store::structs::Struct::{CartItem, Items, PurchaseReceipt};
-    use super::{PAUSER_ROLE, STRK_USD_ASSET_ID, UPGRADER_ROLE};
+    use super::{PAUSER_ROLE, UPGRADER_ROLE};
 
 
     component!(path: PausableComponent, storage: pausable, event: PausableEvent);
@@ -80,8 +77,6 @@ pub mod Store {
         product_name_to_id: Map<felt252, u32>,
         //payment
         payment_token_address: ContractAddress,
-        //pragma oracle
-        pragma_oracle_address: ContractAddress,
         //receipt NFT storage
         receipt_count: u256,
         receipts: Map<u256, PurchaseReceipt>,
@@ -117,11 +112,16 @@ pub mod Store {
         ref self: ContractState,
         default_admin: ContractAddress,
         token_address: ContractAddress,
-        oracle_address: ContractAddress,
     ) {
         // Initialize ERC721 with metadata
-        self.erc721.initializer("Store Purchase Receipts", "RECEIPT", "https://web3-ecommerce-roan.vercel.app/api/nft-metadata/");
-        
+        self
+            .erc721
+            .initializer(
+                "Store Purchase Receipts",
+                "RECEIPT",
+                "https://web3-ecommerce-roan.vercel.app/api/nft-metadata/",
+            );
+
         self.accesscontrol.initializer();
 
         self.accesscontrol._grant_role(DEFAULT_ADMIN_ROLE, default_admin);
@@ -130,9 +130,6 @@ pub mod Store {
 
         // Setting the payment token address
         self.payment_token_address.write(token_address);
-
-        // Setting the pragma oracle address
-        self.pragma_oracle_address.write(oracle_address);
     }
 
     #[generate_trait]
@@ -148,6 +145,12 @@ pub mod Store {
         fn unpause(ref self: ContractState) {
             self.accesscontrol.assert_only_role(PAUSER_ROLE);
             self.pausable.unpause();
+        }
+
+        #[external(v0)]
+        fn add_admin(ref self: ContractState, new_admin: ContractAddress) {
+            self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
+            self.accesscontrol._grant_role(DEFAULT_ADMIN_ROLE, new_admin);
         }
     }
 
@@ -216,14 +219,12 @@ pub mod Store {
             all_items
         }
 
-        // Getter functions for debugging and verification
+
         fn get_token_address(self: @ContractState) -> ContractAddress {
             self.payment_token_address.read()
         }
 
-        fn get_oracle_address(self: @ContractState) -> ContractAddress {
-            self.pragma_oracle_address.read()
-        }
+     
 
         fn buy_product(
             ref self: ContractState,
@@ -234,72 +235,39 @@ pub mod Store {
         ) -> bool {
             let buyer = get_caller_address();
 
-            // Verify the product exists
             assert(productId <= self.store_count.read(), 'Product does not exist');
 
-            // Get the item from storage
             let item = self.store.read(productId);
 
-            // Calculate the total price
             let total_price = item.price * quantity;
             assert(total_price == expected_price, 'Invalid price provided');
 
-            // Verify there's enough quantity
             assert(item.quantity >= quantity, 'Not enough quantity available');
 
-            // Handle payment
             let payment_token_address = self.payment_token_address.read();
             let contract_address = get_contract_address();
 
-            // Get live STRK/USD price from Pragma Oracle
-            let oracle_dispatcher = IPragmaABIDispatcher {
-                contract_address: self.pragma_oracle_address.read(),
-            };
+            // Payment amount validation - frontend handles price conversion
+            assert(payment_amount > 0, 'Payment amount must be > 0');
 
-            // Get STRK/USD price (returns price with 8 decimals)
-            let price_response: PragmaPricesResponse = oracle_dispatcher
-                .get_data_median(DataType::SpotEntry(STRK_USD_ASSET_ID));
-            let strk_usd_price = price_response
-                .price; // Price in USD with 8 decimals (e.g., 150000000 = $1.50)
-
-            // Convert price from USD cents to STRK tokens using live oracle price
-            // Frontend shows $1.50, backend stores 150 (cents)
-            // Oracle returns price with 8 decimals, STRK has 18 decimals
-
-            const CENTS_TO_DOLLARS: u32 = 100; // 100 cents = 1 dollar
-            const ORACLE_DECIMALS: u256 = 100000000; // 1e8 (oracle price decimals)
-            const STRK_DECIMALS: u256 = 1000000000000000000; // 1e18 (STRK token decimals)
-
-            // Convert: cents -> dollars -> STRK tokens using live price
-            // Example: 150 cents, STRK price = $1.50 -> need 1 STRK token
-            // Formula: (price_in_dollars * STRK_DECIMALS) / (strk_usd_price / ORACLE_DECIMALS)
-            let price_in_dollars: u256 = total_price.into() / CENTS_TO_DOLLARS.into();
-            let price_in_tokens: u256 = (price_in_dollars * STRK_DECIMALS * ORACLE_DECIMALS)
-                / strk_usd_price.into();
-
-            // Verify payment amount is sufficient
-            assert(payment_amount >= price_in_tokens, 'Insufficient payment amount');
-
-            // Create token dispatcher
             let token_dispatcher = IERC20Dispatcher { contract_address: payment_token_address };
 
-            // Check buyer's balance
             let buyer_balance = token_dispatcher.balance_of(buyer);
             assert(buyer_balance >= payment_amount, 'Insufficient balance');
 
-            // Transfer tokens from buyer to contract
-            // Use transfer_from to move tokens from buyer's wallet to the contract
+            let allowance = token_dispatcher.allowance(buyer, contract_address);
+            assert(allowance >= payment_amount, 'Insufficient allowance');
+
+            let _transfer_result = token_dispatcher;
             let transfer_result = token_dispatcher
                 .transfer_from(buyer, contract_address, payment_amount);
             assert(transfer_result, 'Token transfer failed');
 
-            // Update item quantity
             let product_name = item.productname;
             let mut updated_item = item;
             updated_item.quantity -= quantity;
             self.store.write(productId, updated_item);
 
-            // Store purchase data for receipt minting
             let purchase_id = self.purchase_count.read() + 1;
             self.purchase_count.write(purchase_id);
 
@@ -310,17 +278,14 @@ pub mod Store {
                 product_name,
                 quantity,
                 total_price_cents: total_price,
-                total_price_tokens: price_in_tokens,
+                total_price_tokens: 0, // Frontend handles price conversion
                 timestamp: get_block_timestamp(),
             };
 
-            // Store purchase
             self.purchases.write(purchase_id, purchase_data);
 
-            // Add to user's purchase history
             self._add_purchase_to_user(buyer, purchase_id);
 
-            // Emit purchase event
             self
                 .emit(
                     PurchaseMade {
@@ -329,7 +294,7 @@ pub mod Store {
                         product_name,
                         quantity,
                         total_price_cents: total_price,
-                        total_price_tokens: price_in_tokens,
+                        total_price_tokens: payment_amount,
                         timestamp: get_block_timestamp(),
                     },
                 );
@@ -343,22 +308,10 @@ pub mod Store {
         ) -> bool {
             let buyer = get_caller_address();
 
-            // Validate cart is not empty
             assert(cart_items.len() > 0, 'Cart cannot be empty');
 
-            // Get live STRK/USD price from Pragma Oracle once for all items
-            let oracle_dispatcher = IPragmaABIDispatcher {
-                contract_address: self.pragma_oracle_address.read(),
-            };
-
-            let price_response: PragmaPricesResponse = oracle_dispatcher
-                .get_data_median(DataType::SpotEntry(STRK_USD_ASSET_ID));
-            let strk_usd_price = price_response.price;
-
-            // Constants for price conversion
-            const CENTS_TO_DOLLARS: u32 = 100;
-            const ORACLE_DECIMALS: u256 = 100000000; // 1e8
-            const STRK_DECIMALS: u256 = 1000000000000000000; // 1e18
+            // Payment amount validation - frontend handles price conversion
+            assert(total_payment_amount > 0, 'Payment amount must be > 0');
 
             let mut total_price_cents: u32 = 0;
             let mut i = 0;
@@ -374,10 +327,8 @@ pub mod Store {
                 // Verify the product exists
                 assert(product_id <= self.store_count.read(), 'Product does not exist');
 
-                // Get the item from storage
                 let item = self.store.read(product_id);
 
-                // Verify price matches
                 assert(item.price == expected_price, 'Price mismatch');
 
                 // Verify there's enough quantity
@@ -389,22 +340,19 @@ pub mod Store {
                 i += 1;
             }
 
-            // Convert total price to STRK tokens
-            let price_in_dollars: u256 = total_price_cents.into() / CENTS_TO_DOLLARS.into();
-            let total_price_tokens: u256 = (price_in_dollars * STRK_DECIMALS * ORACLE_DECIMALS)
-                / strk_usd_price.into();
+            // Frontend handles price conversion, just validate payment amount
+            // We still calculate total_price_cents for validation purposes
+            // but payment validation is handled by frontend
 
-            // Verify payment amount is sufficient
-            assert(total_payment_amount >= total_price_tokens, 'Insufficient payment amount');
-
-            // Handle payment
             let payment_token_address = self.payment_token_address.read();
             let contract_address = get_contract_address();
             let token_dispatcher = IERC20Dispatcher { contract_address: payment_token_address };
 
-            // Check buyer's balance
             let buyer_balance = token_dispatcher.balance_of(buyer);
             assert(buyer_balance >= total_payment_amount, 'Insufficient balance');
+
+            let allowance = token_dispatcher.allowance(buyer, contract_address);
+            assert(allowance >= total_payment_amount, 'Insufficient allowance');
 
             // Transfer tokens from buyer to contract
             let transfer_result = token_dispatcher
@@ -427,13 +375,9 @@ pub mod Store {
 
                 // Calculate individual item total price
                 let item = self.store.read(product_id);
-                let mut _updated_item = item.clone(); // Clone instead of move
                 let item_total_price = item.price * quantity;
-                let item_price_in_dollars: u256 = item_total_price.into() / CENTS_TO_DOLLARS.into();
-                let item_price_tokens: u256 = (item_price_in_dollars
-                    * STRK_DECIMALS
-                    * ORACLE_DECIMALS)
-                    / strk_usd_price.into();
+                // Frontend handles price conversion, so we set tokens to 0
+                let item_price_tokens: u256 = 0;
 
                 // Store purchase data for receipt minting
                 let purchase_id = self.purchase_count.read() + 1;
@@ -450,13 +394,10 @@ pub mod Store {
                     timestamp: get_block_timestamp(),
                 };
 
-                // Store purchase
                 self.purchases.write(purchase_id, purchase_data);
 
-                // Add to user's purchase history
                 self._add_purchase_to_user(buyer, purchase_id);
 
-                // Emit purchase event for each item
                 self
                     .emit(
                         PurchaseMade {
@@ -487,13 +428,17 @@ pub mod Store {
         ) -> bool {
             self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
 
+            assert(amount > 0, 'Amount must be greater than 0');
+
             let contract_balance = self.get_contract_balance();
             assert(amount <= contract_balance, 'Insufficient contract balance');
 
             let token_dispatcher = IERC20Dispatcher {
                 contract_address: self.payment_token_address.read(),
             };
-            token_dispatcher.transfer(recipient, amount);
+            let transfer_success = token_dispatcher.transfer(recipient, amount);
+            assert(transfer_success, 'Token transfer failed');
+
             true
         }
 
@@ -514,33 +459,22 @@ pub mod Store {
         fn mint_receipt(ref self: ContractState, purchase_id: u256) -> bool {
             let buyer = get_caller_address();
 
-            // Verify purchase exists
             assert(purchase_id <= self.purchase_count.read(), 'Purchase does not exist');
 
-            // Verify purchase is not already minted
             assert(!self.purchase_minted.read(purchase_id), 'Purchase already minted');
 
-            // Get purchase data
             let mut purchase_data = self.purchases.read(purchase_id);
 
-            // Verify buyer is the owner of the purchase
             assert(purchase_data.buyer == buyer, 'Not purchase owner');
 
-            // Generate new receipt ID and update purchase data
             let receipt_id = self.receipt_count.read() + 1;
             self.receipt_count.write(receipt_id);
             purchase_data.receipt_id = receipt_id;
-
-            // Store as receipt NFT
             self.receipts.write(receipt_id, purchase_data);
-
-            // Add to user's receipt collection
             self._add_receipt_to_user(buyer, receipt_id);
 
-            // Mark purchase as minted
             self.purchase_minted.write(purchase_id, true);
 
-            // Mint ERC721 NFT
             self.erc721.mint(buyer, receipt_id);
 
             true
@@ -568,12 +502,9 @@ pub mod Store {
             self.purchase_minted.read(purchase_id)
         }
 
-        // Get purchase details by ID - fixes frontend display issue
+
         fn get_purchase_details(self: @ContractState, purchase_id: u256) -> PurchaseReceipt {
-            // Verify purchase exists
             assert(purchase_id <= self.purchase_count.read(), 'Purchase does not exist');
-            
-            // Return purchase data
             self.purchases.read(purchase_id)
         }
     }
